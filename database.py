@@ -14,7 +14,7 @@ def get_database():
     try:
         client = MongoClient(MONGO_URL)
         # Retorna la base de datos compartida para el acopio
-        return client["LogiStockCacao"]
+        return client["cac_valleverde"]
     except Exception as e:
         st.error(f"Error al conectar con MongoDB: {e}")
         return None
