@@ -1,91 +1,91 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from database import get_database
 from datetime import datetime
+
+# Importamos directamente la colección desde tu nuevo database.py
+from database import col_acopios
 
 st.set_page_config(page_title="Dashboard Administrativo", page_icon="📊", layout="wide")
 
-# Guardián de seguridad en ruta protegida
-if not st.session_state.get("logged_in") or st.session_state.get("role") != "Administrador":
+# 1. Guardián de seguridad: Solo Administradores
+if not st.session_state.get("autenticado") or st.session_state.get("rol") != "Administrador":
     st.error("Acceso denegado. Por favor, inicie sesión desde la página principal.")
     st.stop()
 
-db = get_database()
-
-# Función de carga con cache controlable por TTL y limpieza explícita
-@st.cache_data(ttl=60)
+# 2. Función de carga de datos con caché y aplanamiento de JSON
+@st.cache_data(ttl=60) # Caché de 60 segundos por si acaso
 def load_analytics_data():
-    if db is None:
-        return pd.DataFrame(), datetime.now()
-        
-    collection = db["acopio"]
-    # Se extraen todos los registros (datos semiestructurados de los JSON recibidos)
-    raw_data = list(collection.find())
-    
+    # Extraemos todos los documentos de la colección acopios
+    raw_data = list(col_acopios.find())
     current_time = datetime.now()
+    
     if raw_data:
-        # pd.json_normalize aplana estructuras complejas/anidadas para Pandas
+        # pd.json_normalize aplana cualquier JSON anidado o semiestructurado que envíe Databricks
         df = pd.json_normalize(raw_data)
+        # Convertimos el ObjectId de Mongo a string para que no de error al graficar
+        if '_id' in df.columns:
+            df['_id'] = df['_id'].astype(str)
         return df, current_time
+        
     return pd.DataFrame(), current_time
 
-# Interfaz del Panel
+# 3. Interfaz del Panel
 st.title("📊 Panel de Análisis Operativo - CAC Valle Verde")
+st.write(f"Bienvenido, **{st.session_state.get('nombre', 'Administrador')}**.")
 
-# Fila de control: Botón de actualización y etiqueta de marca de tiempo (Timestamp)
+# 4. Requerimiento: Botón de actualización y Etiqueta de Timestamp
 col_btn, col_time = st.columns([1, 3])
 
 with col_btn:
-    # Al presionar el botón, se limpia la caché específica y se recarga la vista
-    if st.button("🔄 Actualizar Datos", use_container_width=True):
+    # Al presionar, limpiamos la memoria y forzamos la recarga (útil para el Job de Databricks)
+    if st.button("🔄 Actualizar Datos Ahora", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
-# Carga de datos procesados
+# Cargamos los datos
 df_acopio, last_update = load_analytics_data()
 
 with col_time:
-    st.info(f"**Última actualización del sistema:** {last_update.strftime('%d/%m/%Y %H:%M:%S')}")
+    st.info(f"**Última actualización de datos:** {last_update.strftime('%d/%m/%Y %H:%M:%S')}")
 
 st.markdown("---")
 
-# Visualización de KPIs y Tablas
+# 5. Renderizado de Gráficos y Tablas
 if not df_acopio.empty:
-    # Métricas principales
-    total_registros = len(df_acopio)
     
-    # Manejo dinámico por si Databricks inyecta esquemas nuevos o campos nulos
-    total_peso = df_acopio['peso_neto'].sum() if 'peso_neto' in df_acopio.columns else 0.0
-    promedio_humedad = df_acopio['humedad'].mean() if 'humedad' in df_acopio.columns else 0.0
+    # KPIs Dinámicos (Usamos .get para no romper la app si Databricks aún no envía estos campos exactos)
+    total_registros = len(df_acopio)
+    total_peso = df_acopio.get('peso_neto', pd.Series([0])).sum()
+    promedio_humedad = df_acopio.get('humedad', pd.Series([0])).mean()
 
     kpi1, kpi2, kpi3 = st.columns(3)
-    kpi1.metric("Total Lotes Recibidos", f"{total_registros} u")
-    kpi2.metric("Volumen Total Acopiado", f"{total_peso:,.2f} Kg")
-    kpi3.metric("Promedio Humedad de Grano", f"{promedio_humedad:.2f} %")
+    kpi1.metric("Lotes Recibidos", f"{total_registros} u")
+    kpi2.metric("Volumen Total", f"{total_peso:,.2f} Kg")
+    kpi3.metric("Promedio Humedad", f"{promedio_humedad:.2f} %")
 
-    # Área de Tablas Estructuradas
-    st.subheader("📋 Registro Consolidado de Datos")
-    # Remover columna interna de MongoDB para visualización limpia si existe
-    display_df = df_acopio.drop(columns=['_id'], errors='ignore')
-    st.dataframe(display_df, use_container_width=True)
+    # Requerimiento: Área de Tablas Estructuradas
+    st.subheader("📋 Registro Consolidado")
+    st.dataframe(df_acopio, use_container_width=True)
 
-    # Área de Gráficas de Análisis
-    st.subheader("📈 Comportamiento de Variables en Tiempo Real")
+    # Requerimiento: Área de Análisis Gráfico
+    st.subheader("📈 Análisis Visual")
     col_g1, col_g2 = st.columns(2)
 
     with col_g1:
+        # Gráfico de tendencias (si existe la columna fecha)
         if 'fecha' in df_acopio.columns and 'peso_neto' in df_acopio.columns:
-            fig_line = px.line(df_acopio, x='fecha', y='peso_neto', title="Tendencia de Pesaje Neto Ingresado")
+            fig_line = px.line(df_acopio, x='fecha', y='peso_neto', title="Tendencia de Pesaje Neto", markers=True)
             st.plotly_chart(fig_line, use_container_width=True)
         else:
-            st.warning("Datos insuficientes para generar gráfico de líneas.")
+            st.warning("Esperando datos de 'fecha' y 'peso_neto' para el gráfico de líneas.")
 
     with col_g2:
+        # Histograma de calidad/humedad
         if 'humedad' in df_acopio.columns:
-            fig_hist = px.histogram(df_acopio, x='humedad', nbins=10, title="Distribución del Porcentaje de Humedad", color_discrete_sequence=['#2E7D32'])
+            fig_hist = px.histogram(df_acopio, x='humedad', nbins=10, title="Distribución de Humedad", color_discrete_sequence=['#2E7D32'])
             st.plotly_chart(fig_hist, use_container_width=True)
         else:
-            st.warning("Datos insuficientes para generar histograma de calidad.")
+            st.warning("Esperando datos de 'humedad' para generar gráfico.")
 else:
-    st.warning("La base de datos se encuentra vacía o en estado de 'Cold Start'. Esperando la primera ejecución de datos desde Databricks.")
+    st.info("ℹ️ La colección de acopios está vacía. Esperando la ingesta de datos desde Databricks...")
