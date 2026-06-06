@@ -12,7 +12,7 @@ def get_database():
         return None
         
     try:
-        client = MongoClient(MONGO_URL)
+        client = MongoClient(mongo_url)
         # Retorna la base de datos compartida para el acopio
         return client["cac_valleverde"]
     except Exception as e:
